@@ -1,4 +1,4 @@
-"""GPT-5 tool-calling agent loop + offline rules fallback."""
+"""OpenAI tool-calling agent loop + offline rules fallback."""
 
 from __future__ import annotations
 
@@ -69,8 +69,8 @@ def _openai_chat_with_tools(messages: list[dict[str, Any]]) -> dict[str, Any] | 
         return None
 
 
-def run_gpt5_agent(sid: str, board: dict[str, Any], message: str) -> AgentResult | None:
-    """Multi-round GPT-5 function-calling loop. Returns None if API unavailable."""
+def run_openai_agent(sid: str, board: dict[str, Any], message: str) -> AgentResult | None:
+    """Multi-round OpenAI function-calling loop. Returns None if API unavailable."""
     system = (
         "You are StudyBoard, a study tutor agent. "
         "Use tools to plan, explain, quiz, make flashcards, and update the live board "
@@ -302,9 +302,9 @@ def run_rules_agent(sid: str, board: dict[str, Any], message: str) -> AgentResul
 
 
 def run_chat(sid: str, board: dict[str, Any], message: str) -> AgentResult:
-    """Prefer GPT-5 tool calling when OPENAI_API_KEY is set; otherwise rules/extractive."""
+    """Prefer OpenAI tool calling when OPENAI_API_KEY is set; otherwise rules/extractive."""
     if os.getenv("OPENAI_API_KEY"):
-        result = run_gpt5_agent(sid, board, message)
+        result = run_openai_agent(sid, board, message)
         if result is not None:
             return result
     return run_rules_agent(sid, board, message)

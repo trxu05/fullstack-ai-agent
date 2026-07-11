@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+*.db
 target/
 .idea/
 .vscode/
@@ -10,5 +11,4 @@ target/
 web/node_modules/
 web/.next/
 python-agent/.venv/
-python-agent/studyboard.db
 java-api/target/

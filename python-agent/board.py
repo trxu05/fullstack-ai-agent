@@ -44,15 +44,15 @@ def persist(sid: str, board: dict[str, Any]) -> None:
 def seed(board: dict[str, Any]) -> None:
     if board["courses"]:
         return
-    c1 = {"id": "c-ecs132", "code": "ECS 132", "name": "Prob & Stat for CS", "color": "#0ea5e9"}
-    c2 = {"id": "c-ecs122b", "code": "ECS 122B", "name": "Algorithm Design", "color": "#6366f1"}
+    c1 = {"id": "c-cs101", "code": "CS 101", "name": "Intro to CS", "color": "#0ea5e9"}
+    c2 = {"id": "c-algo", "code": "CS 201", "name": "Algorithms", "color": "#6366f1"}
     board["courses"].extend([c1, c2])
     board["tasks"].extend(
         [
             {
                 "id": "t1",
                 "course_id": c1["id"],
-                "title": "Review Bayes theorem notes",
+                "title": "Review lecture notes",
                 "due": "this week",
                 "done": False,
                 "priority": "high",
@@ -60,7 +60,7 @@ def seed(board: dict[str, Any]) -> None:
             {
                 "id": "t2",
                 "course_id": c2["id"],
-                "title": "Practice DP on trees",
+                "title": "Practice recursion problems",
                 "due": "this week",
                 "done": False,
                 "priority": "medium",
@@ -68,7 +68,7 @@ def seed(board: dict[str, Any]) -> None:
             {
                 "id": "t3",
                 "course_id": c1["id"],
-                "title": "Quiz myself on distributions",
+                "title": "Quiz myself on key terms",
                 "due": "tonight",
                 "done": False,
                 "priority": "high",
@@ -79,13 +79,12 @@ def seed(board: dict[str, Any]) -> None:
         {
             "id": "m1",
             "course_id": c1["id"],
-            "title": "Bayes & conditional probability",
+            "title": "Course overview",
             "content": (
-                "Bayes theorem: P(A|B) = P(B|A) P(A) / P(B).\n"
-                "Prior P(A), likelihood P(B|A), posterior P(A|B).\n"
-                "Independent events: P(A and B) = P(A) P(B).\n"
-                "Law of total probability: sum over partitions of the sample space.\n"
-                "Common trap: confusing P(A|B) with P(B|A)."
+                "Variables store values. Functions group reusable steps.\n"
+                "Conditionals branch on true/false. Loops repeat work.\n"
+                "Arrays hold ordered collections. Recursion solves a problem via smaller copies.\n"
+                "Tip: write a small example before coding the full solution."
             ),
             "created_at": now(),
             "updated_at": now(),

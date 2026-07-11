@@ -27,16 +27,9 @@ type Board = {
   materials: Material[];
   stats: { courses: number; open_tasks: number; materials: number; quizzes_taken: number };
 };
-type Msg = { role: 'user' | 'assistant'; text: string; meta?: string };
+type Msg = { role: 'user' | 'assistant'; text: string };
 
-const QUICK = [
-  'plan tonight',
-  "what's on my board",
-  'explain Bayes theorem',
-  'quiz me on probability',
-  'flashcards',
-  'edit notes Bayes: also cover total probability',
-];
+const QUICK = ['plan tonight', "what's on my board", 'explain my notes', 'quiz me', 'flashcards'];
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -107,11 +100,7 @@ export default function Home() {
       });
       if (!res.ok) throw new Error(`Chat failed (${res.status})`);
       const data = await res.json();
-      const tools = (data.toolsUsed || data.tools_used || [])
-        .map((t: { name: string }) => t.name)
-        .join(', ');
-      const meta = `provider=${data.provider || 'unknown'}${tools ? ` · tools=${tools}` : ''}`;
-      setMessages((m) => [...m, { role: 'assistant', text: data.reply, meta }]);
+      setMessages((m) => [...m, { role: 'assistant', text: data.reply }]);
       await refreshBoard(id);
     } catch (err) {
       setMessages((m) => [...m, { role: 'assistant', text: `Error: ${(err as Error).message}` }]);
@@ -424,7 +413,7 @@ export default function Home() {
                 <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--font-display), Georgia, serif' }}>
                   Tutor
                 </h2>
-                <p className="text-xs text-[var(--muted)]">Uses your board — tool calls show under each reply.</p>
+                <p className="text-xs text-[var(--muted)]">Grounded in your courses, tasks, and notes.</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {QUICK.map((q) => (
                     <button
@@ -449,7 +438,6 @@ export default function Home() {
                     }`}
                   >
                     {m.text}
-                    {m.meta ? <span className="mono mt-2 block text-[10px] text-[var(--muted)]">{m.meta}</span> : null}
                   </div>
                 ))}
                 <div ref={bottomRef} />

@@ -1,4 +1,4 @@
-"""StudyBoard agent tools — callable by GPT-5 function calling or the rules fallback."""
+"""StudyBoard agent tools — callable by the OpenAI tool loop or the rules fallback."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from board import (
     board_snapshot,
 )
 
-# OpenAI Chat Completions tool schemas (GPT-5 agent tools).
+# OpenAI Chat Completions tool schemas.
 OPENAI_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -422,19 +422,10 @@ def dispatch(board: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         return f"Tool error ({name}): {ex}"
 
 
-HELP = """I'm **StudyBoard** — your course dashboard tutor powered by GPT-5 tool calls.
+HELP = """I'm **StudyBoard** — your course dashboard tutor.
 
-I know your courses, tasks, and notes on this board.
+I can plan what to study, explain from your notes, quiz you, make flashcards,
+and update your board (tasks and notes).
 
-**Try:**
-- what's on my board
-- plan tonight
-- explain Bayes theorem
-- quiz me on probability
-- flashcards
-- add a task to review heaps due tonight
-- edit my Bayes notes to add: ...
-- mark Review Bayes done
-
-Or use the dashboard to add/edit notes, then chat with me.
+Try: what's on my board · plan tonight · explain a topic · quiz me · flashcards
 """

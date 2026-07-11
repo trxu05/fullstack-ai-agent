@@ -1,9 +1,9 @@
-"""StudyBoard FastAPI gateway — board CRUD + GPT-5 agent chat.
+"""StudyBoard FastAPI service — board CRUD + AI agent chat.
 
 Architecture:
   Next.js dashboard → Java Spring Boot (:8080) → this FastAPI agent (:8001)
 
-The agent uses GPT-5 function calling (tools) to plan, explain, quiz, flashcards,
+The agent uses OpenAI function calling to plan, explain, quiz, flashcards,
 and mutate the live board (add tasks, complete work, add/edit notes).
 Without OPENAI_API_KEY, an offline rules/extractive fallback runs the same tools.
 """
