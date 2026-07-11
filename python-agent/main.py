@@ -19,6 +19,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import store
+
 app = FastAPI(title="StudyBoard Agent", version="3.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -51,9 +53,18 @@ BOARDS: dict[str, dict[str, Any]] = {}
 def board_for(session_id: str | None) -> tuple[str, dict[str, Any]]:
     sid = session_id or "default"
     if sid not in BOARDS:
-        BOARDS[sid] = _new_board()
-        _seed(BOARDS[sid])
+        loaded = store.load_board(sid)
+        if loaded is not None:
+            BOARDS[sid] = loaded
+        else:
+            BOARDS[sid] = _new_board()
+            _seed(BOARDS[sid])
+            store.save_board(sid, BOARDS[sid])
     return sid, BOARDS[sid]
+
+
+def persist(sid: str, board: dict[str, Any]) -> None:
+    store.save_board(sid, board)
 
 
 def _seed(board: dict[str, Any]) -> None:
@@ -581,34 +592,38 @@ def get_board(session_id: str = "default") -> dict[str, Any]:
 
 @app.post("/board/courses")
 def api_add_course(body: CourseIn, session_id: str = "default") -> dict[str, Any]:
-    _, board = board_for(session_id)
+    sid, board = board_for(session_id)
     msg = tool_add_course(board, body.code, body.name)
     if body.color:
         board["courses"][-1]["color"] = body.color
+    persist(sid, board)
     return {"message": msg, "board": board_snapshot(board)}
 
 
 @app.post("/board/tasks")
 def api_add_task(body: TaskIn, session_id: str = "default") -> dict[str, Any]:
-    _, board = board_for(session_id)
+    sid, board = board_for(session_id)
     msg = tool_add_task(board, body.title, body.course_id, body.due, body.priority)
+    persist(sid, board)
     return {"message": msg, "board": board_snapshot(board)}
 
 
 @app.post("/board/tasks/{task_id}/done")
 def api_complete_task(task_id: str, session_id: str = "default") -> dict[str, Any]:
-    _, board = board_for(session_id)
+    sid, board = board_for(session_id)
     for t in board["tasks"]:
         if t["id"] == task_id:
             t["done"] = True
+            persist(sid, board)
             return {"message": f"Marked done: {t['title']}", "board": board_snapshot(board)}
     raise HTTPException(404, "task not found")
 
 
 @app.post("/board/materials")
 def api_add_material(body: MaterialIn, session_id: str = "default") -> dict[str, Any]:
-    _, board = board_for(session_id)
+    sid, board = board_for(session_id)
     msg = tool_add_material(board, body.title, body.content, body.course_id)
+    persist(sid, board)
     return {"message": msg, "board": board_snapshot(board)}
 
 
@@ -638,6 +653,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     if intent == "add_course":
         result = tool_add_course(board, args["code"], args["name"])
         trace("add_course", result, args)
+        persist(sid, board)
         return ChatResponse(reply=result, tools_used=traces, provider=provider)
 
     if intent == "add_task":
@@ -649,16 +665,19 @@ def chat(req: ChatRequest) -> ChatResponse:
             args.get("priority", "medium"),
         )
         trace("add_task", result, args)
+        persist(sid, board)
         return ChatResponse(reply=result, tools_used=traces, provider=provider)
 
     if intent == "complete_task":
         result = tool_complete_task(board, args["title_ref"])
         trace("complete_task", result, args)
+        persist(sid, board)
         return ChatResponse(reply=result, tools_used=traces, provider=provider)
 
     if intent == "add_material":
         result = tool_add_material(board, args["title"], args["content"])
         trace("add_material", result, {"title": args["title"]})
+        persist(sid, board)
         return ChatResponse(reply=result, tools_used=traces, provider=provider)
 
     if intent == "explain":

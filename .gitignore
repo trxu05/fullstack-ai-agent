@@ -10,5 +10,5 @@ target/
 web/node_modules/
 web/.next/
 python-agent/.venv/
+python-agent/studyboard.db
 java-api/target/
-.DS_Store

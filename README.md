@@ -29,7 +29,7 @@ Next.js (:3000) → Java gateway (:8080) → FastAPI agent (:8001)
 | `add task` / `add notes` / `done` | Mutate board state |
 
 Offline **extractive** mode works without an API key. Set `OPENAI_API_KEY`
-for stronger tutoring. Board state can persist via **SQLite**.
+for stronger tutoring. Board state persists to **SQLite** (`studyboard.db`).
 
 ## Quick start
 
@@ -68,8 +68,7 @@ Optional: `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8080`
 ```
 web/            Next.js StudyBoard dashboard
 java-api/       Spring Boot gateway
-python-agent/   FastAPI board + AI agent tools
-frontend/       legacy static UI (unused)
+python-agent/   FastAPI board + AI agent tools (+ SQLite store)
 ```
 
 ## GitHub
