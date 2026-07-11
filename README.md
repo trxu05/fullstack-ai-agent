@@ -1,31 +1,39 @@
-# News Digest Agent
+# StudyBoard AI Agent
 
-**Real purpose:** a personal briefing assistant for job-search / industry catch-up.
-You tell it a topic; it **collects public news**, then returns an **AI or extractive recap**.
+Personal **course dashboard** + an **AI agent** that can plan, explain, quiz,
+and update your board using **tool calls** grounded in *your* courses, tasks,
+and notes.
 
-## 2026 stack (what recruiters scan for)
+Ask: *what should I study tonight?* / *explain Bayes* / *quiz me* / *add task: …*
+
+## Stack
 
 | Layer | Tech |
 | --- | --- |
-| Frontend | **Next.js 15**, **React 19**, **TypeScript**, **Tailwind CSS** |
-| API gateway | **Java 17**, **Spring Boot** (sessions, validation, proxy) |
-| Agent | **Python**, **FastAPI** (RSS collect + filter + recap tools) |
+| Dashboard UI | **Next.js 15**, **React 19**, **TypeScript**, **Tailwind CSS** |
+| API gateway | **Java 17**, **Spring Boot** (sessions, board proxy, chat) |
+| AI agent | **Python**, **FastAPI** (board store + tutor tools) |
 
 ```
-Next.js UI (:3000) → Java gateway (:8080) → FastAPI agent (:8001) → public RSS
+Next.js (:3000) → Java gateway (:8080) → FastAPI agent (:8001)
 ```
 
-## Commands it understands
+## Agent tools
 
-- `digest AI chips` — collect + recap now  
-- `watch topic cloud networking` — remember a beat  
-- `digest` / `brief me` — recap the watched topic  
+| Tool | What it does |
+| --- | --- |
+| `plan tonight` | Prioritize open tasks |
+| `what's on my board` | Status snapshot |
+| `explain …` | Teach from **your** notes |
+| `quiz me` / `flashcards` | Check understanding from notes |
+| `add task` / `add notes` / `done` | Mutate board state |
 
-Offline extractive recap works without keys. Set `OPENAI_API_KEY` for LLM recap.
+Offline **extractive** mode works without an API key. Set `OPENAI_API_KEY`
+for stronger tutoring. Board state can persist via **SQLite**.
 
 ## Quick start
 
-**Python 3.11–3.12** recommended for the agent.
+**Python 3.11–3.12** recommended.
 
 ```bash
 # 1) Agent
@@ -38,7 +46,7 @@ uvicorn main:app --port 8001 --reload
 cd java-api
 mvn spring-boot:run
 
-# 3) Next.js UI
+# 3) Dashboard
 cd web
 npm install
 npm run dev
@@ -49,16 +57,21 @@ Optional: `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8080`
 
 ## Interview angles
 
-- Why a Java gateway in front of Python (sessions / future auth / rate limits)
-- Tool loop: collect → filter → recap (not a single chat completion)
-- React/Next vs vanilla HTML for product UI
-- Failure modes: dead RSS feed, empty topic match, agent down → 502
+- Why **dashboard + agent**, not chat-only (state lives on the board)
+- Tool loop: plan / explain / quiz grounded in user materials
+- Java gateway for sessions + board CRUD in front of Python
+- Fallback when no API key (extractive explain/quiz)
+- Failure modes: empty notes, agent down → 502, weak topic match
 
 ## Repo layout
 
 ```
-web/            Next.js + React + TS + Tailwind
+web/            Next.js StudyBoard dashboard
 java-api/       Spring Boot gateway
-python-agent/   FastAPI news digest agent
-frontend/       legacy static UI (optional)
+python-agent/   FastAPI board + AI agent tools
+frontend/       legacy static UI (unused)
 ```
+
+## GitHub
+
+https://github.com/trxu05/fullstack-ai-agent

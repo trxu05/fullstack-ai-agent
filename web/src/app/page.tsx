@@ -1,42 +1,94 @@
 'use client';
 
-import { FormEvent, useEffect, useRef, useState } from 'react';
-
-type Msg = { role: 'user' | 'assistant'; text: string; meta?: string };
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 const API = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8080';
 
+type Course = { id: string; code: string; name: string; color: string };
+type Task = {
+  id: string;
+  course_id?: string | null;
+  title: string;
+  due: string;
+  done: boolean;
+  priority: string;
+};
+type Material = {
+  id: string;
+  course_id?: string | null;
+  title: string;
+  preview?: string;
+  content?: string;
+  created_at?: string;
+};
+type Board = {
+  courses: Course[];
+  tasks: Task[];
+  materials: Material[];
+  stats: { courses: number; open_tasks: number; materials: number; quizzes_taken: number };
+};
+type Msg = { role: 'user' | 'assistant'; text: string; meta?: string };
+
+const QUICK = ['plan tonight', "what's on my board", 'explain Bayes theorem', 'quiz me on probability', 'flashcards'];
+
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [input, setInput] = useState('digest AI chips');
+  const [board, setBoard] = useState<Board | null>(null);
   const [busy, setBusy] = useState(false);
+  const [input, setInput] = useState('plan tonight');
   const [messages, setMessages] = useState<Msg[]>([
     {
       role: 'assistant',
-      text: 'News Digest Agent ready. Ask for a topic briefing, or watch a topic then say “digest”.',
+      text: 'StudyBoard ready. Your courses, tasks, and notes live here — ask me to plan tonight, explain from your notes, or quiz you.',
     },
   ]);
+  const [courseCode, setCourseCode] = useState('');
+  const [courseName, setCourseName] = useState('');
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskCourse, setTaskCourse] = useState('');
+  const [taskDue, setTaskDue] = useState('tonight');
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteBody, setNoteBody] = useState('');
+  const [noteCourse, setNoteCourse] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  async function ensureSession() {
+  const ensureSession = useCallback(async () => {
     if (sessionId) return sessionId;
     const res = await fetch(`${API}/api/sessions`, { method: 'POST' });
-    if (!res.ok) throw new Error(`session failed (${res.status})`);
+    if (!res.ok) throw new Error(`Could not create session (${res.status})`);
     const data = await res.json();
     setSessionId(data.sessionId);
     return data.sessionId as string;
-  }
+  }, [sessionId]);
 
-  async function onSubmit(e: FormEvent) {
+  const refreshBoard = useCallback(
+    async (id?: string) => {
+      const sid = id || sessionId || (await ensureSession());
+      const res = await fetch(`${API}/api/sessions/${sid}/board`);
+      if (!res.ok) throw new Error(`Board failed (${res.status}) — is Java :8080 and Python :8001 up?`);
+      const data = await res.json();
+      setBoard(data as Board);
+      return sid;
+    },
+    [ensureSession, sessionId],
+  );
+
+  useEffect(() => {
+    refreshBoard().catch((e) => setError((e as Error).message));
+  }, [refreshBoard]);
+
+  async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
     setInput('');
     setBusy(true);
+    setError(null);
     setMessages((m) => [...m, { role: 'user', text }]);
     try {
       const id = await ensureSession();
@@ -45,77 +97,383 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
       });
-      if (!res.ok) throw new Error(`chat failed (${res.status}) — is Java :8080 and Python :8001 up?`);
+      if (!res.ok) throw new Error(`Chat failed (${res.status})`);
       const data = await res.json();
       const tools = (data.toolsUsed || data.tools_used || [])
         .map((t: { name: string }) => t.name)
         .join(', ');
       const meta = `provider=${data.provider || 'unknown'}${tools ? ` · tools=${tools}` : ''}`;
       setMessages((m) => [...m, { role: 'assistant', text: data.reply, meta }]);
+      await refreshBoard(id);
     } catch (err) {
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', text: `Error: ${(err as Error).message}` },
-      ]);
+      setMessages((m) => [...m, { role: 'assistant', text: `Error: ${(err as Error).message}` }]);
     } finally {
       setBusy(false);
     }
   }
 
+  async function addCourse(e: FormEvent) {
+    e.preventDefault();
+    if (!courseCode.trim() || !courseName.trim()) return;
+    const id = await ensureSession();
+    const res = await fetch(`${API}/api/sessions/${id}/courses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: courseCode.trim(), name: courseName.trim() }),
+    });
+    if (!res.ok) throw new Error('add course failed');
+    const data = await res.json();
+    setBoard(data.board);
+    setCourseCode('');
+    setCourseName('');
+  }
+
+  async function addTask(e: FormEvent) {
+    e.preventDefault();
+    if (!taskTitle.trim()) return;
+    const id = await ensureSession();
+    const res = await fetch(`${API}/api/sessions/${id}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: taskTitle.trim(),
+        course_id: taskCourse || null,
+        due: taskDue || 'sometime',
+        priority: 'medium',
+      }),
+    });
+    if (!res.ok) throw new Error('add task failed');
+    const data = await res.json();
+    setBoard(data.board);
+    setTaskTitle('');
+  }
+
+  async function completeTask(taskId: string) {
+    const id = await ensureSession();
+    const res = await fetch(`${API}/api/sessions/${id}/tasks/${taskId}/done`, { method: 'POST' });
+    if (!res.ok) throw new Error('complete failed');
+    const data = await res.json();
+    setBoard(data.board);
+  }
+
+  async function addNote(e: FormEvent) {
+    e.preventDefault();
+    if (!noteTitle.trim() || !noteBody.trim()) return;
+    const id = await ensureSession();
+    const res = await fetch(`${API}/api/sessions/${id}/materials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: noteTitle.trim(),
+        content: noteBody.trim(),
+        course_id: noteCourse || null,
+      }),
+    });
+    if (!res.ok) throw new Error('add notes failed');
+    const data = await res.json();
+    setBoard(data.board);
+    setNoteTitle('');
+    setNoteBody('');
+  }
+
+  function courseLabel(courseId?: string | null) {
+    if (!courseId || !board) return 'General';
+    return board.courses.find((c) => c.id === courseId)?.code || 'General';
+  }
+
+  const openTasks = board?.tasks.filter((t) => !t.done) || [];
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-slate-100 text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-8">
-        <header className="mb-6">
-          <p className="text-sm font-medium uppercase tracking-wide text-sky-700">
-            Next.js · React · TypeScript · Tailwind · Java · FastAPI
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">News Digest Agent</h1>
-          <p className="mt-2 text-slate-600">
-            Tell it a topic → collects public RSS headlines → returns a usable recap for industry catch-up.
-          </p>
-          <p className="mt-2 text-sm text-slate-500">
-            Try <code className="rounded bg-white px-1.5 py-0.5 border">digest AI chips</code>{' '}
-            <code className="rounded bg-white px-1.5 py-0.5 border">watch topic cloud networking</code>{' '}
-            <code className="rounded bg-white px-1.5 py-0.5 border">digest</code>
-          </p>
+    <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-8 flex flex-col gap-3 border-b border-[var(--line)] pb-6 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="mono text-xs font-medium uppercase tracking-[0.2em] text-[var(--accent)]">
+              StudyBoard
+            </p>
+            <h1
+              className="mt-1 text-4xl font-semibold tracking-tight text-[var(--ink)]"
+              style={{ fontFamily: 'var(--font-display), Georgia, serif' }}
+            >
+              Your courses. Your plan. Your tutor.
+            </h1>
+            <p className="mt-2 max-w-xl text-[var(--muted)]">
+              Keep classes, tasks, and notes in one place. The AI knows what&apos;s on your board —
+              ask it what to study tonight, or quiz you from your notes.
+            </p>
+          </div>
+          {board ? (
+            <div className="flex flex-wrap gap-3 text-sm text-[var(--muted)]">
+              <Stat label="Courses" value={board.stats.courses} />
+              <Stat label="Open tasks" value={board.stats.open_tasks} />
+              <Stat label="Notes" value={board.stats.materials} />
+              <Stat label="Quizzes" value={board.stats.quizzes_taken} />
+            </div>
+          ) : null}
         </header>
 
-        <section className="flex-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-          <div className="flex flex-col gap-3">
-            {messages.map((m, i) => (
-              <div
-                key={i}
-                className={`max-w-[95%] whitespace-pre-wrap rounded-xl px-4 py-3 text-sm leading-relaxed ${
-                  m.role === 'user'
-                    ? 'ml-auto bg-sky-100 text-slate-900'
-                    : 'mr-auto bg-slate-100 text-slate-800'
-                }`}
-              >
-                {m.text}
-                {m.meta ? <span className="mt-2 block text-xs text-slate-500">{m.meta}</span> : null}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
-        </section>
+        {error ? (
+          <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {error}
+          </p>
+        ) : null}
 
-        <form onSubmit={onSubmit} className="mt-4 flex gap-2">
-          <input
-            className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none ring-sky-400 focus:ring-2"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="digest semiconductor and AI infrastructure"
-            disabled={busy}
-          />
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-60"
-          >
-            {busy ? 'Working…' : 'Run'}
-          </button>
-        </form>
+        <div className="grid gap-6 lg:grid-cols-12">
+          {/* Left: board */}
+          <section className="space-y-6 lg:col-span-7">
+            <Panel title="Courses">
+              <div className="mb-4 flex flex-wrap gap-2">
+                {(board?.courses || []).map((c) => (
+                  <div
+                    key={c.id}
+                    className="rounded-lg border border-[var(--line)] bg-white px-3 py-2"
+                    style={{ borderLeftWidth: 4, borderLeftColor: c.color }}
+                  >
+                    <div className="text-sm font-semibold">{c.code}</div>
+                    <div className="text-xs text-[var(--muted)]">{c.name}</div>
+                  </div>
+                ))}
+              </div>
+              <form onSubmit={addCourse} className="flex flex-wrap gap-2">
+                <input
+                  className="field w-28"
+                  placeholder="ECS 150"
+                  value={courseCode}
+                  onChange={(e) => setCourseCode(e.target.value)}
+                />
+                <input
+                  className="field min-w-[12rem] flex-1"
+                  placeholder="Operating Systems"
+                  value={courseName}
+                  onChange={(e) => setCourseName(e.target.value)}
+                />
+                <button type="submit" className="btn">
+                  Add
+                </button>
+              </form>
+            </Panel>
+
+            <Panel title="To-do">
+              <ul className="mb-4 space-y-2">
+                {openTasks.length === 0 ? (
+                  <li className="text-sm text-[var(--muted)]">No open tasks — add one below.</li>
+                ) : (
+                  openTasks.map((t) => (
+                    <li
+                      key={t.id}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-[var(--line)] bg-white px-3 py-2"
+                    >
+                      <div>
+                        <div className="text-sm font-medium">{t.title}</div>
+                        <div className="text-xs text-[var(--muted)]">
+                          {courseLabel(t.course_id)} · due {t.due} · {t.priority}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-ghost shrink-0"
+                        onClick={() => completeTask(t.id).catch((e) => setError(e.message))}
+                      >
+                        Done
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <form onSubmit={(e) => addTask(e).catch((err) => setError(err.message))} className="flex flex-wrap gap-2">
+                <input
+                  className="field min-w-[12rem] flex-1"
+                  placeholder="Review midterm notes"
+                  value={taskTitle}
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                />
+                <select
+                  className="field"
+                  value={taskCourse}
+                  onChange={(e) => setTaskCourse(e.target.value)}
+                >
+                  <option value="">General</option>
+                  {(board?.courses || []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="field w-28"
+                  placeholder="tonight"
+                  value={taskDue}
+                  onChange={(e) => setTaskDue(e.target.value)}
+                />
+                <button type="submit" className="btn">
+                  Add
+                </button>
+              </form>
+            </Panel>
+
+            <Panel title="Notes">
+              <ul className="mb-4 space-y-2">
+                {(board?.materials || []).length === 0 ? (
+                  <li className="text-sm text-[var(--muted)]">Paste lecture notes so the tutor can use them.</li>
+                ) : (
+                  board!.materials.map((m) => (
+                    <li key={m.id} className="rounded-lg border border-[var(--line)] bg-white px-3 py-2">
+                      <div className="text-sm font-medium">{m.title}</div>
+                      <div className="text-xs text-[var(--muted)]">
+                        {courseLabel(m.course_id)} · {m.preview}
+                      </div>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <form onSubmit={(e) => addNote(e).catch((err) => setError(err.message))} className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    className="field min-w-[12rem] flex-1"
+                    placeholder="Note title"
+                    value={noteTitle}
+                    onChange={(e) => setNoteTitle(e.target.value)}
+                  />
+                  <select
+                    className="field"
+                    value={noteCourse}
+                    onChange={(e) => setNoteCourse(e.target.value)}
+                  >
+                    <option value="">General</option>
+                    {(board?.courses || []).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <textarea
+                  className="field min-h-28 w-full"
+                  placeholder="Paste notes here…"
+                  value={noteBody}
+                  onChange={(e) => setNoteBody(e.target.value)}
+                />
+                <button type="submit" className="btn">
+                  Save notes
+                </button>
+              </form>
+            </Panel>
+          </section>
+
+          {/* Right: tutor */}
+          <section className="lg:col-span-5">
+            <div className="sticky top-4 flex h-[min(80vh,720px)] flex-col rounded-2xl border border-[var(--line)] bg-[var(--card)] shadow-sm">
+              <div className="border-b border-[var(--line)] px-4 py-3">
+                <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--font-display), Georgia, serif' }}>
+                  Tutor
+                </h2>
+                <p className="text-xs text-[var(--muted)]">Uses your board — tool calls show under each reply.</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {QUICK.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      className="rounded-full border border-[var(--line)] bg-white px-2.5 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      onClick={() => setInput(q)}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`max-w-[95%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-relaxed ${
+                      m.role === 'user'
+                        ? 'ml-auto bg-[var(--accent-soft)] text-[var(--ink)]'
+                        : 'mr-auto bg-white border border-[var(--line)]'
+                    }`}
+                  >
+                    {m.text}
+                    {m.meta ? <span className="mono mt-2 block text-[10px] text-[var(--muted)]">{m.meta}</span> : null}
+                  </div>
+                ))}
+                <div ref={bottomRef} />
+              </div>
+              <form onSubmit={onChat} className="flex gap-2 border-t border-[var(--line)] p-3">
+                <input
+                  className="field flex-1"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="plan tonight / explain … / quiz me on …"
+                  disabled={busy}
+                />
+                <button type="submit" className="btn" disabled={busy}>
+                  {busy ? '…' : 'Ask'}
+                </button>
+              </form>
+            </div>
+          </section>
+        </div>
       </div>
+
+      <style jsx global>{`
+        .field {
+          border: 1px solid var(--line);
+          background: white;
+          border-radius: 0.75rem;
+          padding: 0.55rem 0.75rem;
+          font-size: 0.875rem;
+          outline: none;
+        }
+        .field:focus {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        .btn {
+          border-radius: 0.75rem;
+          background: var(--accent);
+          color: white;
+          padding: 0.55rem 1rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+        }
+        .btn:disabled {
+          opacity: 0.6;
+        }
+        .btn-ghost {
+          border-radius: 0.5rem;
+          border: 1px solid var(--line);
+          background: white;
+          padding: 0.25rem 0.6rem;
+          font-size: 0.75rem;
+          color: var(--muted);
+        }
+        .btn-ghost:hover {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
+      `}</style>
     </main>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-center">
+      <div className="text-lg font-semibold text-[var(--ink)]">{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
+    </div>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-[var(--card)] p-4 shadow-sm">
+      <h2
+        className="mb-3 text-lg font-semibold text-[var(--ink)]"
+        style={{ fontFamily: 'var(--font-display), Georgia, serif' }}
+      >
+        {title}
+      </h2>
+      {children}
+    </div>
   );
 }
