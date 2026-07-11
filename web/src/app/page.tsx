@@ -29,7 +29,14 @@ type Board = {
 };
 type Msg = { role: 'user' | 'assistant'; text: string; meta?: string };
 
-const QUICK = ['plan tonight', "what's on my board", 'explain Bayes theorem', 'quiz me on probability', 'flashcards'];
+const QUICK = [
+  'plan tonight',
+  "what's on my board",
+  'explain Bayes theorem',
+  'quiz me on probability',
+  'flashcards',
+  'edit notes Bayes: also cover total probability',
+];
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -50,6 +57,7 @@ export default function Home() {
   const [noteTitle, setNoteTitle] = useState('');
   const [noteBody, setNoteBody] = useState('');
   const [noteCourse, setNoteCourse] = useState('');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -160,6 +168,24 @@ export default function Home() {
     e.preventDefault();
     if (!noteTitle.trim() || !noteBody.trim()) return;
     const id = await ensureSession();
+    if (editingNoteId) {
+      const res = await fetch(`${API}/api/sessions/${id}/materials/${editingNoteId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: noteTitle.trim(),
+          content: noteBody.trim(),
+          append: false,
+        }),
+      });
+      if (!res.ok) throw new Error('edit notes failed');
+      const data = await res.json();
+      setBoard(data.board);
+      setEditingNoteId(null);
+      setNoteTitle('');
+      setNoteBody('');
+      return;
+    }
     const res = await fetch(`${API}/api/sessions/${id}/materials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -174,6 +200,13 @@ export default function Home() {
     setBoard(data.board);
     setNoteTitle('');
     setNoteBody('');
+  }
+
+  function startEditNote(m: Material) {
+    setEditingNoteId(m.id);
+    setNoteTitle(m.title);
+    setNoteBody(m.content || m.preview || '');
+    setNoteCourse(m.course_id || '');
   }
 
   function courseLabel(courseId?: string | null) {
@@ -318,9 +351,20 @@ export default function Home() {
                 ) : (
                   board!.materials.map((m) => (
                     <li key={m.id} className="rounded-lg border border-[var(--line)] bg-white px-3 py-2">
-                      <div className="text-sm font-medium">{m.title}</div>
-                      <div className="text-xs text-[var(--muted)]">
-                        {courseLabel(m.course_id)} · {m.preview}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium">{m.title}</div>
+                          <div className="text-xs text-[var(--muted)]">
+                            {courseLabel(m.course_id)} · {m.preview}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                          onClick={() => startEditNote(m)}
+                        >
+                          Edit
+                        </button>
                       </div>
                     </li>
                   ))
@@ -354,8 +398,21 @@ export default function Home() {
                   onChange={(e) => setNoteBody(e.target.value)}
                 />
                 <button type="submit" className="btn">
-                  Save notes
+                  {editingNoteId ? 'Save edits' : 'Save notes'}
                 </button>
+                {editingNoteId ? (
+                  <button
+                    type="button"
+                    className="ml-2 text-xs text-[var(--muted)] hover:underline"
+                    onClick={() => {
+                      setEditingNoteId(null);
+                      setNoteTitle('');
+                      setNoteBody('');
+                    }}
+                  >
+                    Cancel edit
+                  </button>
+                ) : null}
               </form>
             </Panel>
           </section>

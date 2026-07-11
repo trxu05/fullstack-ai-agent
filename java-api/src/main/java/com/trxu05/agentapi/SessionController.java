@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,7 +36,7 @@ public class SessionController {
     public SessionController(@Value("${agent.base-url:http://127.0.0.1:8001}") String agentBaseUrl) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setReadTimeout(Duration.ofSeconds(60));
+        factory.setReadTimeout(Duration.ofSeconds(120));
         this.agentClient = RestClient.builder().baseUrl(agentBaseUrl).requestFactory(factory).build();
     }
 
@@ -99,6 +100,24 @@ public class SessionController {
     public Map<?, ?> addMaterial(@PathVariable String id, @RequestBody Map<String, Object> body) {
         requireSession(id);
         return postBoard("/board/materials?session_id=" + id, body);
+    }
+
+    @PutMapping("/sessions/{id}/materials/{materialId}")
+    public Map<?, ?> editMaterial(
+            @PathVariable String id,
+            @PathVariable String materialId,
+            @RequestBody Map<String, Object> body) {
+        requireSession(id);
+        Map<?, ?> resp = agentClient.put()
+                .uri("/board/materials/{materialId}?session_id={id}", materialId, id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(Map.class);
+        if (resp == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "empty response");
+        }
+        return resp;
     }
 
     @PostMapping("/sessions/{id}/chat")

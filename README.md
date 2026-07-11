@@ -1,10 +1,12 @@
 # StudyBoard AI Agent
 
-Personal **course dashboard** + an **AI agent** that can plan, explain, quiz,
-and update your board using **tool calls** grounded in *your* courses, tasks,
+Personal **course dashboard** + a **GPT-5 agent** that plans, explains, quizzes,
+and updates your board through **tool calls**, grounded in *your* courses, tasks,
 and notes.
 
-Ask: *what should I study tonight?* / *explain Bayes* / *quiz me* / *add task: …*
+```
+Next.js (:3000) → Java Spring Boot gateway (:8080) → FastAPI GPT-5 agent (:8001)
+```
 
 ## Stack
 
@@ -12,24 +14,22 @@ Ask: *what should I study tonight?* / *explain Bayes* / *quiz me* / *add task: �
 | --- | --- |
 | Dashboard UI | **Next.js 15**, **React 19**, **TypeScript**, **Tailwind CSS** |
 | API gateway | **Java 17**, **Spring Boot** (sessions, board proxy, chat) |
-| AI agent | **Python**, **FastAPI** (board store + tutor tools) |
+| AI agent | **Python**, **FastAPI**, **GPT-5** function calling |
 
-```
-Next.js (:3000) → Java gateway (:8080) → FastAPI agent (:8001)
-```
-
-## Agent tools
+## Agent tools (OpenAI function calling)
 
 | Tool | What it does |
 | --- | --- |
-| `plan tonight` | Prioritize open tasks |
-| `what's on my board` | Status snapshot |
-| `explain …` | Teach from **your** notes |
-| `quiz me` / `flashcards` | Check understanding from notes |
-| `add task` / `add notes` / `done` | Mutate board state |
+| `plan_study` | Prioritize open tasks |
+| `explain_topic` | Teach from **your** notes |
+| `generate_quiz` / `generate_flashcards` | Check understanding from notes |
+| `list_board` | Status snapshot |
+| `add_task` / `complete_task` | Mutate tasks |
+| `add_notes` / `edit_notes` | Add or edit notes on the live board |
 
-Offline **extractive** mode works without an API key. Set `OPENAI_API_KEY`
-for stronger tutoring. Board state persists to **SQLite** (`studyboard.db`).
+Set `OPENAI_API_KEY` (optional `OPENAI_MODEL`, default **`gpt-5`**). Without a key,
+the same tools run via an offline rules/extractive fallback. Board state persists
+to **SQLite** (`studyboard.db`).
 
 ## Quick start
 
@@ -40,6 +40,7 @@ for stronger tutoring. Board state persists to **SQLite** (`studyboard.db`).
 cd python-agent
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+export OPENAI_API_KEY=sk-...   # optional but enables GPT-5 tool calling
 uvicorn main:app --port 8001 --reload
 
 # 2) Java gateway
@@ -53,22 +54,17 @@ npm run dev
 # open http://localhost:3000
 ```
 
-Optional: `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8080`
-
-## Interview angles
-
-- Why **dashboard + agent**, not chat-only (state lives on the board)
-- Tool loop: plan / explain / quiz grounded in user materials
-- Java gateway for sessions + board CRUD in front of Python
-- Fallback when no API key (extractive explain/quiz)
-- Failure modes: empty notes, agent down → 502, weak topic match
-
 ## Repo layout
 
 ```
 web/            Next.js StudyBoard dashboard
 java-api/       Spring Boot gateway
-python-agent/   FastAPI board + AI agent tools (+ SQLite store)
+python-agent/
+  main.py       FastAPI routes
+  agent.py      GPT-5 tool-calling loop + rules fallback
+  tools.py      Tool implementations + OpenAI schemas
+  board.py      Session board + grounding context
+  store.py      SQLite persistence
 ```
 
 ## GitHub
