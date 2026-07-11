@@ -1,7 +1,11 @@
-"""Tool-calling AI agent service (FastAPI).
+"""News Digest Agent — fetch headlines for a topic and produce an AI recap.
 
-Uses OpenAI when OPENAI_API_KEY is set; otherwise a deterministic mock LLM
-that still exercises the tool loop so the demo runs offline.
+Real purpose: tell the agent what to cover (e.g. "AI chips", "Arista networking");
+it pulls public RSS feeds, filters by topic, and returns a short briefing you
+can use for job-search / industry catch-up.
+
+Works offline with a built-in extractive recap. Set OPENAI_API_KEY for LLM recap.
+Requires Python 3.11–3.12 recommended.
 """
 
 from __future__ import annotations
@@ -9,14 +13,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="AI Agent Service", version="1.0.0")
+app = FastAPI(title="News Digest Agent", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,7 +33,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MEMORY: dict[str, str] = {}
+# Topic preferences remembered across turns (short-term agent memory).
+PREFERENCES: dict[str, str] = {}
+
+# Public RSS sources (no API key). Enough for a real digest workflow.
+FEEDS = [
+    ("BBC Technology", "https://feeds.bbci.co.uk/news/technology/rss.xml"),
+    ("HN Front Page", "https://hnrss.org/frontpage"),
+    ("CNBC Top News", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+]
 
 
 class ChatRequest(BaseModel):
@@ -44,106 +61,104 @@ class ChatResponse(BaseModel):
     provider: str
 
 
-def tool_calculator(expression: str) -> str:
-    allowed = re.fullmatch(r"[\d\.\+\-\*/\(\) ]+", expression or "")
-    if not allowed:
-        return "error: only basic arithmetic is allowed"
-    try:
-        value = eval(expression, {"__builtins__": {}}, {})  # noqa: S307 — demo sandbox
-        return str(value)
-    except Exception as exc:  # noqa: BLE001
-        return f"error: {exc}"
+def _http_get(url: str, timeout: float = 8.0) -> bytes:
+    req = Request(url, headers={"User-Agent": "NewsDigestAgent/2.0 (+github.com/trxu05)"})
+    with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — intentional outbound fetch
+        return resp.read()
 
 
-def tool_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+def fetch_rss_items(limit_per_feed: int = 8) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for source, url in FEEDS:
+        try:
+            raw = _http_get(url)
+            root = ET.fromstring(raw)
+            # RSS 2.0
+            for item in root.findall(".//item")[:limit_per_feed]:
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+                pub = (item.findtext("pubDate") or "").strip()
+                if title:
+                    items.append(
+                        {
+                            "source": source,
+                            "title": title,
+                            "link": link,
+                            "summary": desc[:280],
+                            "published": pub,
+                        }
+                    )
+        except (URLError, ET.ParseError, TimeoutError, OSError) as exc:
+            items.append(
+                {
+                    "source": source,
+                    "title": f"(feed unavailable: {source})",
+                    "link": "",
+                    "summary": str(exc)[:120],
+                    "published": "",
+                }
+            )
+    return items
 
 
-def tool_memory_set(key: str, value: str) -> str:
-    MEMORY[key] = value
-    return f"stored {key}={value}"
+def filter_by_topic(items: list[dict[str, str]], topic: str) -> list[dict[str, str]]:
+    tokens = [t for t in re.split(r"[^a-z0-9]+", topic.lower()) if len(t) > 2]
+    if not tokens:
+        return items[:12]
+    scored: list[tuple[int, dict[str, str]]] = []
+    for it in items:
+        blob = f"{it['title']} {it['summary']}".lower()
+        score = sum(1 for t in tokens if t in blob)
+        if score:
+            scored.append((score, it))
+    scored.sort(key=lambda x: -x[0])
+    return [it for _, it in scored[:10]] or items[:8]
 
 
-def tool_memory_get(key: str) -> str:
-    return MEMORY.get(key, f"(no value for {key})")
+def extractive_recap(topic: str, items: list[dict[str, str]]) -> str:
+    if not items:
+        return f"No headlines matched “{topic}”. Try a broader topic (e.g. AI, chips, markets)."
+    lines = [f"## Briefing: {topic}", f"_Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_", ""]
+    lines.append(f"Pulled {len(items)} relevant headlines from public RSS feeds:")
+    for i, it in enumerate(items, 1):
+        lines.append(f"{i}. **{it['title']}** ({it['source']})")
+        if it["summary"]:
+            lines.append(f"   - {it['summary']}")
+        if it["link"]:
+            lines.append(f"   - {it['link']}")
+    lines.append("")
+    lines.append(
+        "Takeaway: skim the top 3 links above for depth; ask me to “recap #2” or "
+        "“watch topic X” to refine the next digest."
+    )
+    return "\n".join(lines)
 
 
-TOOLS = {
-    "calculator": lambda args: tool_calculator(str(args.get("expression", ""))),
-    "current_time": lambda _args: tool_now(),
-    "memory_set": lambda args: tool_memory_set(str(args.get("key", "")), str(args.get("value", ""))),
-    "memory_get": lambda args: tool_memory_get(str(args.get("key", ""))),
-}
-
-
-def run_tools_from_text(message: str) -> tuple[str, list[ToolTrace]]:
-    """Mock agent policy: detect intents and call tools, then answer."""
-    traces: list[ToolTrace] = []
-    lower = message.lower()
-    facts: list[str] = []
-
-    calc = re.search(r"(?:calculate|compute|what is|what's)\s+([0-9\.\+\-\*/\(\) ]+)", lower)
-    if calc or re.fullmatch(r"[\d\.\+\-\*/\(\) ]+", message.strip()):
-        expr = calc.group(1) if calc else message.strip()
-        result = TOOLS["calculator"]({"expression": expr})
-        traces.append(ToolTrace(name="calculator", args={"expression": expr}, result=result))
-        facts.append(f"calculation result: {result}")
-
-    if any(k in lower for k in ("time", "date", "utc", "clock")):
-        result = TOOLS["current_time"]({})
-        traces.append(ToolTrace(name="current_time", args={}, result=result))
-        facts.append(f"current time: {result}")
-
-    remember = re.search(r"remember\s+(\w+)\s*(?:is|=)\s*(.+)$", message, re.I)
-    if remember:
-        key, value = remember.group(1), remember.group(2).strip()
-        result = TOOLS["memory_set"]({"key": key, "value": value})
-        traces.append(ToolTrace(name="memory_set", args={"key": key, "value": value}, result=result))
-        facts.append(result)
-
-    recall = re.search(r"(?:what(?:'s| is)|recall|get)\s+(\w+)", lower)
-    if recall and "time" not in lower:
-        key = recall.group(1)
-        if key not in {"the", "a", "an", "my", "current"}:
-            result = TOOLS["memory_get"]({"key": key})
-            traces.append(ToolTrace(name="memory_get", args={"key": key}, result=result))
-            facts.append(f"{key}: {result}")
-
-    if facts:
-        reply = "I used tools to answer.\n" + "\n".join(f"- {f}" for f in facts)
-    else:
-        reply = (
-            "I'm a demo tool-calling agent. Try: "
-            "'calculate 12 * (3 + 4)', 'what time is it', "
-            "or 'remember project is fullstack-ai-agent'."
-        )
-    return reply, traces
-
-
-def run_openai(message: str) -> tuple[str, list[ToolTrace], str]:
-    """Optional real-model path; falls back to mock on any failure."""
+def openai_recap(topic: str, items: list[dict[str, str]]) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        reply, traces = run_tools_from_text(message)
-        return reply, traces, "mock-llm"
-
+    if not api_key or not items:
+        return None
     try:
         import httpx
 
-        # Keep the live path simple: one-shot completion that may emit tool JSON.
-        system = (
-            "You are a concise engineering assistant. "
-            "If you need a tool, reply ONLY with JSON: "
-            '{"tool":"calculator|current_time|memory_set|memory_get","args":{...}}. '
-            "Otherwise answer normally."
-        )
+        bullet = "\n".join(f"- ({it['source']}) {it['title']}: {it['summary']}" for it in items[:8])
         payload = {
             "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": message},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise industry briefing assistant for a software engineer. "
+                        "Write a short recap (6–10 bullets + 2-sentence takeaway). No fluff."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Topic: {topic}\nHeadlines:\n{bullet}",
+                },
             ],
-            "temperature": 0.2,
+            "temperature": 0.3,
         }
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(
@@ -152,30 +167,102 @@ def run_openai(message: str) -> tuple[str, list[ToolTrace], str]:
                 json=payload,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-
-        traces: list[ToolTrace] = []
-        if content.startswith("{") and "tool" in content:
-            spec = json.loads(content)
-            name = spec.get("tool")
-            args = spec.get("args") or {}
-            if name in TOOLS:
-                result = TOOLS[name](args)
-                traces.append(ToolTrace(name=name, args=args, result=result))
-                return f"Tool {name} → {result}", traces, "openai"
-
-        return content, traces, "openai"
+            return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception:
-        reply, traces = run_tools_from_text(message)
-        return reply, traces, "mock-llm-fallback"
+        return None
+
+
+def tool_collect_and_recap(topic: str) -> tuple[str, str]:
+    items = filter_by_topic(fetch_rss_items(), topic)
+    llm = openai_recap(topic, items)
+    if llm:
+        header = f"## AI recap: {topic}\n_Sources: {', '.join(sorted({i['source'] for i in items}))}_\n\n"
+        return header + llm, "openai"
+    return extractive_recap(topic, items), "extractive"
+
+
+def tool_watch_topic(topic: str) -> str:
+    PREFERENCES["watch_topic"] = topic
+    return f"Watching topic “{topic}”. Say “digest” or “brief me” anytime."
+
+
+def tool_list_watch() -> str:
+    t = PREFERENCES.get("watch_topic")
+    return f"Currently watching: {t}" if t else "No watched topic yet. Try: watch topic AI infrastructure"
+
+
+def parse_intent(message: str) -> tuple[str, dict[str, Any]]:
+    lower = message.lower().strip()
+
+    m = re.search(r"watch(?:ing)?\s+topic\s+(.+)$", message, re.I)
+    if m:
+        return "watch_topic", {"topic": m.group(1).strip()}
+
+    if lower in {"digest", "brief me", "briefing", "what's new", "whats new"}:
+        topic = PREFERENCES.get("watch_topic", "technology")
+        return "collect_and_recap", {"topic": topic}
+
+    m = re.search(
+        r"(?:digest|brief|recap|summarize|collect|news(?:\s+about)?|headlines(?:\s+on)?)\s+(.+)$",
+        message,
+        re.I,
+    )
+    if m:
+        return "collect_and_recap", {"topic": m.group(1).strip()}
+
+    if "watch" in lower and "topic" in lower:
+        return "list_watch", {}
+
+    # Default: treat whole message as a topic request if it looks like keywords.
+    if len(message.split()) <= 6 and not message.endswith("?"):
+        return "collect_and_recap", {"topic": message.strip()}
+
+    return "help", {}
+
+
+HELP = (
+    "I'm your **News Digest Agent**. Tell me what to cover and I'll collect "
+    "public headlines and write a recap.\n\n"
+    "Examples:\n"
+    "- `digest AI chips`\n"
+    "- `brief networking and cloud`\n"
+    "- `watch topic semiconductor` then later `digest`\n"
+    "- `what's new` (uses your watched topic)\n"
+)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "service": "news-digest-agent"}
 
 
 @app.post("/agent/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    reply, traces, provider = run_openai(req.message)
+    intent, args = parse_intent(req.message)
+    traces: list[ToolTrace] = []
+    provider = "rules"
+
+    if intent == "help":
+        return ChatResponse(reply=HELP, tools_used=[], provider=provider)
+
+    if intent == "watch_topic":
+        result = tool_watch_topic(str(args["topic"]))
+        traces.append(ToolTrace(name="watch_topic", args=args, result=result))
+        return ChatResponse(reply=result, tools_used=traces, provider=provider)
+
+    if intent == "list_watch":
+        result = tool_list_watch()
+        traces.append(ToolTrace(name="list_watch", args={}, result=result))
+        return ChatResponse(reply=result, tools_used=traces, provider=provider)
+
+    # collect_and_recap
+    topic = str(args.get("topic") or PREFERENCES.get("watch_topic") or "technology")
+    reply, provider = tool_collect_and_recap(topic)
+    traces.append(
+        ToolTrace(
+            name="collect_and_recap",
+            args={"topic": topic},
+            result=f"digest generated ({provider})",
+        )
+    )
     return ChatResponse(reply=reply, tools_used=traces, provider=provider)

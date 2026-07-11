@@ -3,19 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Agent Workbench</title>
+  <title>News Digest Agent</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="app">
     <header>
-      <h1>AI Agent Workbench</h1>
-      <p>Java API gateway · Python tool-calling agent · JavaScript UI</p>
+      <h1>News Digest Agent</h1>
+      <p>Tell it a topic → it collects public headlines → returns an AI/extractive recap.</p>
+      <p class="hint">Try: <code>digest AI chips</code> · <code>watch topic cloud networking</code> · <code>digest</code></p>
     </header>
     <section id="log" class="log" aria-live="polite"></section>
     <form id="chat-form">
-      <input id="message" type="text" placeholder="Try: calculate 12 * (3 + 4)" autocomplete="off" required />
-      <button type="submit">Send</button>
+      <input id="message" type="text" placeholder="digest semiconductor and AI infrastructure" autocomplete="off" required />
+      <button type="submit">Run</button>
     </form>
   </main>
   <script src="app.js"></script>

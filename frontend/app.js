@@ -25,7 +25,10 @@ async function ensureSession() {
   if (!res.ok) throw new Error("failed to create session");
   const data = await res.json();
   sessionId = data.sessionId;
-  addBubble("assistant", "Session ready. Ask me to calculate, check time, or remember a key.");
+  addBubble(
+    "assistant",
+    "Ready. Ask for a digest on any topic, or set a watched topic and say “digest”.",
+  );
   return sessionId;
 }
 
@@ -45,7 +48,7 @@ form.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
     });
-    if (!res.ok) throw new Error(`chat failed (${res.status})`);
+    if (!res.ok) throw new Error(`request failed (${res.status})`);
     const data = await res.json();
     const tools = (data.toolsUsed || data.tools_used || [])
       .map((t) => t.name)
@@ -53,7 +56,10 @@ form.addEventListener("submit", async (event) => {
     const meta = `provider=${data.provider || "unknown"}${tools ? ` · tools=${tools}` : ""}`;
     addBubble("assistant", data.reply, meta);
   } catch (err) {
-    addBubble("assistant", `Error: ${err.message}. Is the Python agent running on :8001?`);
+    addBubble(
+      "assistant",
+      `Error: ${err.message}. Start the Python agent on :8001 (see README).`,
+    );
   } finally {
     button.disabled = false;
     input.focus();

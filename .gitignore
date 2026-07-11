@@ -7,3 +7,8 @@ target/
 .DS_Store
 *.class
 .env
+web/node_modules/
+web/.next/
+python-agent/.venv/
+java-api/target/
+.DS_Store

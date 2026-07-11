@@ -1,48 +1,64 @@
-# Full-Stack AI Agent Workbench
+# News Digest Agent
 
-Java API gateway + Python tool-calling agent + JavaScript chat UI.
+**Real purpose:** a personal briefing assistant for job-search / industry catch-up.
+You tell it a topic; it **collects public news**, then returns an **AI or extractive recap**.
+
+## 2026 stack (what recruiters scan for)
+
+| Layer | Tech |
+| --- | --- |
+| Frontend | **Next.js 15**, **React 19**, **TypeScript**, **Tailwind CSS** |
+| API gateway | **Java 17**, **Spring Boot** (sessions, validation, proxy) |
+| Agent | **Python**, **FastAPI** (RSS collect + filter + recap tools) |
 
 ```
-Browser (JS)  →  Java Spring Boot (:8080)  →  Python Agent (:8001)
-                     sessions / proxy           tools + LLM loop
+Next.js UI (:3000) → Java gateway (:8080) → FastAPI agent (:8001) → public RSS
 ```
 
-## Stack
+## Commands it understands
 
-| Layer | Tech | Role |
-| --- | --- | --- |
-| Frontend | JavaScript, HTML/CSS | Chat UI with tool-trace metadata |
-| API | Java 17, Spring Boot | Session store, validation, proxy to agent |
-| Agent | Python, FastAPI | Tool calling (calculator, time, memory) |
+- `digest AI chips` — collect + recap now  
+- `watch topic cloud networking` — remember a beat  
+- `digest` / `brief me` — recap the watched topic  
 
-Runs **without an API key** via a mock LLM that still exercises the tool loop.
-Set `OPENAI_API_KEY` to use a real model.
+Offline extractive recap works without keys. Set `OPENAI_API_KEY` for LLM recap.
 
 ## Quick start
 
+**Python 3.11–3.12** recommended for the agent.
+
 ```bash
-# Terminal 1 — Python agent
+# 1) Agent
 cd python-agent
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --port 8001 --reload
 
-# Terminal 2 — Java API (also serves frontend/)
+# 2) Java gateway
 cd java-api
 mvn spring-boot:run
 
-# Open http://localhost:8080
+# 3) Next.js UI
+cd web
+npm install
+npm run dev
+# open http://localhost:3000
 ```
 
-## API
+Optional: `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8080`
 
-- `POST /api/sessions` — create session
-- `POST /api/sessions/{id}/chat` — `{ "message": "..." }`
-- `GET /api/sessions/{id}` — history
+## Interview angles
 
-## Interview talking points
+- Why a Java gateway in front of Python (sessions / future auth / rate limits)
+- Tool loop: collect → filter → recap (not a single chat completion)
+- React/Next vs vanilla HTML for product UI
+- Failure modes: dead RSS feed, empty topic match, agent down → 502
 
-- Why a Java gateway in front of the Python agent (sessions, validation, future auth)
-- Tool-calling loop vs plain chat completion
-- Failure mode when the agent is down (502 from gateway)
-- What you would add next: Redis session store, rate limits, eval harness
+## Repo layout
+
+```
+web/            Next.js + React + TS + Tailwind
+java-api/       Spring Boot gateway
+python-agent/   FastAPI news digest agent
+frontend/       legacy static UI (optional)
+```
