@@ -11,14 +11,36 @@ from board import (
     find_course,
     find_material,
     materials_for,
-    notes_blob,
     now,
     open_tasks,
     board_snapshot,
 )
+from retrieve import citation_line, format_passages, notes_from_hits, retrieve
 
 # OpenAI Chat Completions tool schemas.
 OPENAI_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_notes",
+            "description": (
+                "Search the student's notes by keyword overlap and return the most relevant "
+                "passages with titles. Call this before explain, quiz, or flashcards."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Topic or question to search in notes",
+                    },
+                    "k": {"type": "integer", "description": "Max passages (default 4)"},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -309,7 +331,14 @@ def edit_notes(
     return f"Updated notes **{mat['title']}** (id={mat['id']}, {len(mat['content'])} chars)."
 
 
-def _extractive_explain(topic: str, notes: str) -> str:
+def retrieve_notes(board: dict[str, Any], query: str, k: int = 4) -> str:
+    hits = retrieve(board, query, k=max(1, min(int(k or 4), 8)))
+    if not hits:
+        return "No notes on the board yet. Ask the student to paste lecture notes."
+    return format_passages(hits)
+
+
+def _extractive_explain(topic: str, notes: str, sources: str = "") -> str:
     if not notes.strip():
         return (
             f"I don't have notes about “{topic}” yet. "
@@ -327,10 +356,12 @@ def _extractive_explain(topic: str, notes: str) -> str:
     picks = [ln for _, ln in scored[:6]] or lines[:6]
     out = [f"## Explain: {topic}", f"_From your notes · {now()}_", ""]
     out.extend(f"- {p}" for p in picks)
+    if sources:
+        out.extend(["", sources])
     return "\n".join(out)
 
 
-def _extractive_quiz(topic: str, notes: str, n: int = 3) -> str:
+def _extractive_quiz(topic: str, notes: str, n: int = 3, sources: str = "") -> str:
     lines = [ln.strip(" -•\t") for ln in notes.splitlines() if len(ln.strip()) > 20]
     if not lines:
         return "No notes to quiz from. Add or edit notes first."
@@ -340,10 +371,12 @@ def _extractive_quiz(topic: str, notes: str, n: int = 3) -> str:
     for i, ln in enumerate(ranked[:n], 1):
         body.append(f"**Q{i}.** In your own words: what does this mean?\n“{ln[:140]}”")
         body.append("")
+    if sources:
+        body.append(sources)
     return "\n".join(body)
 
 
-def _extractive_flashcards(notes: str, n: int = 6) -> str:
+def _extractive_flashcards(notes: str, n: int = 6, sources: str = "") -> str:
     lines = [ln.strip(" -•\t") for ln in notes.splitlines() if ":" in ln or len(ln) > 25]
     if not lines:
         lines = [ln.strip() for ln in notes.splitlines() if ln.strip()][:n]
@@ -359,35 +392,35 @@ def _extractive_flashcards(notes: str, n: int = 6) -> str:
         out.append(f"**{i}. {front}**")
         out.append(f"   → {back}")
         out.append("")
+    if sources:
+        out.append(sources)
     return "\n".join(out) if cards else "Need more notes to build flashcards."
 
 
 def explain_topic(board: dict[str, Any], topic: str, course_ref: str | None = None) -> str:
-    course = find_course(board, course_ref) if course_ref else None
-    notes = notes_blob(board, course["id"] if course else None) or notes_blob(board)
-    # When called as a GPT-5 tool, the model already has board context; return grounded extract
-    # plus a clear label. The agent loop may also ask the model to narrate after the tool result.
-    return _extractive_explain(topic, notes)
+    query = f"{course_ref or ''} {topic}".strip()
+    hits = retrieve(board, query, k=4)
+    notes = notes_from_hits(hits)
+    return _extractive_explain(topic, notes, citation_line(hits))
 
 
 def generate_quiz(board: dict[str, Any], topic: str, n: int = 3) -> str:
-    notes = notes_blob(board)
+    hits = retrieve(board, topic, k=5)
+    notes = notes_from_hits(hits)
     board["quiz_history"].append({"topic": topic, "at": now(), "provider": "tool"})
-    return _extractive_quiz(topic, notes, n=max(1, min(int(n or 3), 8)))
+    return _extractive_quiz(topic, notes, n=max(1, min(int(n or 3), 8)), sources=citation_line(hits))
 
 
 def generate_flashcards(board: dict[str, Any], topic: str | None = None) -> str:
-    notes = notes_blob(board)
-    if topic:
-        filtered = "\n".join(ln for ln in notes.splitlines() if topic.lower() in ln.lower()) or notes
-    else:
-        filtered = notes
-    return _extractive_flashcards(filtered)
+    hits = retrieve(board, topic or "key terms", k=6)
+    notes = notes_from_hits(hits)
+    return _extractive_flashcards(notes, sources=citation_line(hits))
 
 
 def dispatch(board: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     """Run one named tool against the board. Mutating tools update `board` in place."""
     handlers: dict[str, Callable[..., str]] = {
+        "retrieve_notes": lambda: retrieve_notes(board, args.get("query", ""), args.get("k", 4)),
         "list_board": lambda: list_board(board),
         "plan_study": lambda: plan_study(board),
         "explain_topic": lambda: explain_topic(board, args.get("topic", ""), args.get("course_ref")),

@@ -147,8 +147,8 @@ def board_snapshot(board: dict[str, Any]) -> dict[str, Any]:
 
 
 def board_context_for_llm(board: dict[str, Any]) -> str:
-    """Compact board dump so GPT-5 tools stay grounded in user materials."""
-    lines = ["## Live study board", ""]
+    """Compact board index — full note bodies are fetched via retrieve_notes."""
+    lines = ["## Live study board (index only)", ""]
     lines.append("Courses:")
     for c in board["courses"]:
         lines.append(f"- id={c['id']} code={c['code']} name={c['name']}")
@@ -164,11 +164,10 @@ def board_context_for_llm(board: dict[str, Any]) -> str:
     if not open_tasks(board):
         lines.append("- (none)")
     lines.append("")
-    lines.append("Notes (full content — ground explanations/quizzes here):")
+    lines.append("Notes (titles only — call retrieve_notes for content):")
     for m in board["materials"]:
-        lines.append(f"### id={m['id']} title={m['title']}")
-        lines.append(m["content"][:8000])
-        lines.append("")
+        preview = (m.get("content") or "")[:80].replace("\n", " ")
+        lines.append(f"- id={m['id']} title={m['title']} preview={preview}")
     if not board["materials"]:
         lines.append("(no notes yet)")
     return "\n".join(lines)

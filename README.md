@@ -1,8 +1,8 @@
 # StudyBoard
 
 A study-planning web app: manage courses, tasks, and notes in one dashboard,
-with an AI tutor that plans, explains, quizzes, and updates the board from your
-own materials.
+with an AI tutor that retrieves from your notes, then plans, explains, quizzes,
+and updates the board.
 
 ```
 Next.js (:3000) → Spring Boot gateway (:8080) → FastAPI agent (:8001)
@@ -14,14 +14,16 @@ Next.js (:3000) → Spring Boot gateway (:8080) → FastAPI agent (:8001)
 | --- | --- |
 | Dashboard | Next.js, React, TypeScript |
 | API gateway | Java, Spring Boot |
-| AI agent | Python, FastAPI, OpenAI tool calling |
-| Storage | SQLite |
+| AI agent | Python, FastAPI, OpenAI function calling |
+| Retrieval | Keyword overlap over note chunks (no vector DB) |
+| Storage | SQLite (`python-agent/studyboard.db`) |
 
 ## What it does
 
-- Board for courses, tasks, and notes
-- Tutor tools: study plan, explain, quiz, flashcards, add/edit notes, add/complete tasks
-- Works without an API key via a rules-based fallback
+- Board for courses, tasks, and notes (survives refresh via session id + SQLite)
+- Tutor tools: retrieve notes, study plan, explain, quiz, flashcards, add/edit notes, add/complete tasks
+- Chat shows which tools ran and whether the reply came from OpenAI or the rules fallback
+- Works without an API key via the same tools
 
 ## Quick start
 

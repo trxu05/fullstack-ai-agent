@@ -20,7 +20,7 @@ from agent import run_chat
 from board import board_for, board_snapshot, persist
 from tools import add_course, add_notes, add_task, complete_task, edit_notes
 
-app = FastAPI(title="StudyBoard Agent", version="4.0.0")
+app = FastAPI(title="StudyBoard Agent", version="4.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,9 +29,15 @@ app.add_middleware(
 )
 
 
+class ChatTurn(BaseModel):
+    role: str
+    text: str = ""
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     session_id: str | None = None
+    history: list[ChatTurn] = Field(default_factory=list)
 
 
 class ToolTraceOut(BaseModel):
@@ -73,7 +79,7 @@ class MaterialEdit(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "studyboard-agent", "version": "4.0.0"}
+    return {"status": "ok", "service": "studyboard-agent", "version": "4.1.0"}
 
 
 @app.get("/board")
@@ -140,7 +146,12 @@ def api_edit_material(
 @app.post("/agent/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     sid, board = board_for(req.session_id)
-    result = run_chat(sid, board, req.message)
+    result = run_chat(
+        sid,
+        board,
+        req.message,
+        history=[{"role": t.role, "text": t.text} for t in req.history],
+    )
     return ChatResponse(
         reply=result.reply,
         tools_used=[

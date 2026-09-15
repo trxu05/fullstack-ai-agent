@@ -69,21 +69,31 @@ def _openai_chat_with_tools(messages: list[dict[str, Any]]) -> dict[str, Any] | 
         return None
 
 
-def run_openai_agent(sid: str, board: dict[str, Any], message: str) -> AgentResult | None:
+def run_openai_agent(
+    sid: str,
+    board: dict[str, Any],
+    message: str,
+    history: list[dict[str, str]] | None = None,
+) -> AgentResult | None:
     """Multi-round OpenAI function-calling loop. Returns None if API unavailable."""
     system = (
         "You are StudyBoard, a study tutor agent. "
         "Use tools to plan, explain, quiz, make flashcards, and update the live board "
         "(add/complete tasks, add/edit notes). "
-        "Ground every explanation, quiz, and flashcard in the student's own materials below. "
+        "The board index lists note titles only. "
+        "Before explain, quiz, or flashcards, call retrieve_notes so answers are grounded "
+        "in retrieved passages. Cite note titles. "
         "Prefer calling tools over inventing board state. After board mutations, briefly confirm what changed."
         "\n\n"
-        + board_context_for_llm(board)[:14000]
+        + board_context_for_llm(board)[:8000]
     )
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": message},
-    ]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    for turn in (history or [])[-8:]:
+        role = turn.get("role")
+        text = (turn.get("text") or "").strip()
+        if role in {"user", "assistant"} and text:
+            messages.append({"role": role, "content": text[:4000]})
+    messages.append({"role": "user", "content": message})
     traces: list[ToolTrace] = []
     mutated = False
     model_name = default_model()
@@ -283,17 +293,21 @@ def run_rules_agent(sid: str, board: dict[str, Any], message: str) -> AgentResul
         return AgentResult(reply=result, tools_used=traces, provider="rules")
 
     if intent == "explain_topic":
+        trace("retrieve_notes", "passages", {"query": args["topic"]})
         reply = explain_topic(board, args["topic"])
         trace("explain_topic", "explained (extractive)", args)
         return AgentResult(reply=reply, tools_used=traces, provider="extractive")
 
     if intent == "generate_quiz":
+        trace("retrieve_notes", "passages", {"query": args.get("topic") or "my notes"})
         reply = generate_quiz(board, args.get("topic") or "my notes")
         persist(sid, board)
         trace("generate_quiz", "quiz generated", args)
         return AgentResult(reply=reply, tools_used=traces, provider="extractive")
 
     if intent == "generate_flashcards":
+        topic = args.get("topic") or "key terms"
+        trace("retrieve_notes", "passages", {"query": topic})
         reply = generate_flashcards(board, args.get("topic"))
         trace("generate_flashcards", "cards", args)
         return AgentResult(reply=reply, tools_used=traces, provider="extractive")
@@ -301,10 +315,15 @@ def run_rules_agent(sid: str, board: dict[str, Any], message: str) -> AgentResul
     return AgentResult(reply=HELP, tools_used=[], provider="rules")
 
 
-def run_chat(sid: str, board: dict[str, Any], message: str) -> AgentResult:
+def run_chat(
+    sid: str,
+    board: dict[str, Any],
+    message: str,
+    history: list[dict[str, str]] | None = None,
+) -> AgentResult:
     """Prefer OpenAI tool calling when OPENAI_API_KEY is set; otherwise rules/extractive."""
     if os.getenv("OPENAI_API_KEY"):
-        result = run_openai_agent(sid, board, message)
+        result = run_openai_agent(sid, board, message, history)
         if result is not None:
             return result
     return run_rules_agent(sid, board, message)

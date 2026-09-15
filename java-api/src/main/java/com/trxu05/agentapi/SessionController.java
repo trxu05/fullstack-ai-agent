@@ -1,7 +1,10 @@
 package com.trxu05.agentapi;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,8 +42,9 @@ public class SessionController {
     }
 
     @PostMapping("/sessions")
-    public Map<String, String> createSession() {
-        String id = UUID.randomUUID().toString();
+    public Map<String, String> createSession(@RequestBody(required = false) Map<String, String> body) {
+        String requested = body == null ? null : body.get("sessionId");
+        String id = (requested != null && !requested.isBlank()) ? requested.trim() : UUID.randomUUID().toString();
         sessions.put(id, Boolean.TRUE);
         try {
             agentClient.get().uri("/board?session_id={id}", id).retrieve().toBodilessEntity();
@@ -118,10 +122,16 @@ public class SessionController {
 
         AgentReply agentReply;
         try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("message", request.message());
+            payload.put("session_id", id);
+            if (request.history() != null) {
+                payload.put("history", request.history());
+            }
             agentReply = agentClient.post()
                     .uri("/agent/chat")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("message", request.message(), "session_id", id))
+                    .body(payload)
                     .retrieve()
                     .body(AgentReply.class);
         } catch (Exception ex) {
@@ -150,14 +160,21 @@ public class SessionController {
     }
 
     private void requireSession(String id) {
-        if (!sessions.containsKey(id)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "session not found");
-        }
+        // Resume after gateway restart: SQLite on the agent is the source of truth.
+        sessions.putIfAbsent(id, Boolean.TRUE);
     }
 
-    public record ChatRequest(@NotBlank String message) {}
+    public record ChatTurn(String role, String text) {}
 
-    public record ChatResponse(String reply, List<Map<String, Object>> toolsUsed, String provider) {}
+    public record ChatRequest(@NotBlank String message, List<ChatTurn> history) {}
 
-    public record AgentReply(String reply, List<Map<String, Object>> tools_used, String provider) {}
+    public record ChatResponse(
+            String reply,
+            @JsonProperty("toolsUsed") List<Map<String, Object>> toolsUsed,
+            String provider) {}
+
+    public record AgentReply(
+            String reply,
+            @JsonAlias("tools_used") @JsonProperty("tools_used") List<Map<String, Object>> tools_used,
+            String provider) {}
 }

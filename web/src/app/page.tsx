@@ -27,21 +27,40 @@ type Board = {
   materials: Material[];
   stats: { courses: number; open_tasks: number; materials: number; quizzes_taken: number };
 };
-type Msg = { role: 'user' | 'assistant'; text: string };
+type ToolTrace = { name: string; args?: Record<string, unknown>; result?: string };
+type Msg = {
+  role: 'user' | 'assistant';
+  text: string;
+  provider?: string;
+  tools?: ToolTrace[];
+};
 
 const QUICK = ['plan tonight', "what's on my board", 'explain my notes', 'quiz me', 'flashcards'];
+const SESSION_KEY = 'studyboard.sessionId';
+const WELCOME: Msg = {
+  role: 'assistant',
+  text: 'Click a chip below (try “quiz me”). You’ll see which tool ran, and which note was retrieved.',
+};
+
+function messagesKey(id: string) {
+  return `studyboard.messages.${id}`;
+}
+
+function parseSources(text: string): string[] {
+  const m = text.match(/Sources:\s*(.+)$/m);
+  if (!m) return [];
+  return m[1]
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [board, setBoard] = useState<Board | null>(null);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('plan tonight');
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: 'assistant',
-      text: 'StudyBoard ready. Your courses, tasks, and notes live here — ask me to plan tonight, explain from your notes, or quiz you.',
-    },
-  ]);
+  const [messages, setMessages] = useState<Msg[]>([WELCOME]);
   const [courseCode, setCourseCode] = useState('');
   const [courseName, setCourseName] = useState('');
   const [taskTitle, setTaskTitle] = useState('');
@@ -58,13 +77,34 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    if (!sessionId) return;
+    localStorage.setItem(messagesKey(sessionId), JSON.stringify(messages));
+  }, [messages, sessionId]);
+
   const ensureSession = useCallback(async () => {
     if (sessionId) return sessionId;
-    const res = await fetch(`${API}/api/sessions`, { method: 'POST' });
+    const saved = typeof window !== 'undefined' ? localStorage.getItem(SESSION_KEY) : null;
+    const res = await fetch(`${API}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(saved ? { sessionId: saved } : {}),
+    });
     if (!res.ok) throw new Error(`Could not create session (${res.status})`);
     const data = await res.json();
-    setSessionId(data.sessionId);
-    return data.sessionId as string;
+    const id = data.sessionId as string;
+    localStorage.setItem(SESSION_KEY, id);
+    setSessionId(id);
+    const raw = localStorage.getItem(messagesKey(id));
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Msg[];
+        if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+      } catch {
+        /* ignore */
+      }
+    }
+    return id;
   }, [sessionId]);
 
   const refreshBoard = useCallback(
@@ -83,30 +123,42 @@ export default function Home() {
     refreshBoard().catch((e) => setError((e as Error).message));
   }, [refreshBoard]);
 
-  async function onChat(e: FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || busy) return;
+  async function sendChat(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
     setInput('');
     setBusy(true);
     setError(null);
-    setMessages((m) => [...m, { role: 'user', text }]);
+    setMessages((m) => [...m, { role: 'user', text: trimmed }]);
     try {
       const id = await ensureSession();
+      const history = messages
+        .filter((m) => m.text && m.text !== WELCOME.text)
+        .slice(-8)
+        .map((m) => ({ role: m.role, text: m.text }));
       const res = await fetch(`${API}/api/sessions/${id}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: trimmed, history }),
       });
       if (!res.ok) throw new Error(`Chat failed (${res.status})`);
       const data = await res.json();
-      setMessages((m) => [...m, { role: 'assistant', text: data.reply }]);
+      const tools = (data.toolsUsed || data.tools_used || []) as ToolTrace[];
+      setMessages((m) => [
+        ...m,
+        { role: 'assistant', text: data.reply, provider: data.provider, tools },
+      ]);
       await refreshBoard(id);
     } catch (err) {
       setMessages((m) => [...m, { role: 'assistant', text: `Error: ${(err as Error).message}` }]);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onChat(e: FormEvent) {
+    e.preventDefault();
+    await sendChat(input);
   }
 
   async function addCourse(e: FormEvent) {
@@ -204,6 +256,8 @@ export default function Home() {
   }
 
   const openTasks = board?.tasks.filter((t) => !t.done) || [];
+  const lastTrace = [...messages].reverse().find((m) => m.role === 'assistant' && (m.tools?.length || m.provider));
+  const cited = lastTrace ? parseSources(lastTrace.text) : [];
 
   return (
     <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
@@ -211,7 +265,7 @@ export default function Home() {
         <header className="mb-8 flex flex-col gap-3 border-b border-[var(--line)] pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="mono text-xs font-medium uppercase tracking-[0.2em] text-[var(--accent)]">
-              StudyBoard
+              StudyBoard · retrieve → tool → board
             </p>
             <h1
               className="mt-1 text-4xl font-semibold tracking-tight text-[var(--ink)]"
@@ -220,18 +274,51 @@ export default function Home() {
               Your courses. Your plan. Your tutor.
             </h1>
             <p className="mt-2 max-w-xl text-[var(--muted)]">
-              Keep classes, tasks, and notes in one place. The AI knows what&apos;s on your board —
-              ask it what to study tonight, or quiz you from your notes.
+              Keep classes, tasks, and notes in one place. The tutor retrieves from your notes,
+              then plans, explains, or quizzes — and can update the board in the same turn.
             </p>
           </div>
-          {board ? (
-            <div className="flex flex-wrap gap-3 text-sm text-[var(--muted)]">
-              <Stat label="Courses" value={board.stats.courses} />
-              <Stat label="Open tasks" value={board.stats.open_tasks} />
-              <Stat label="Notes" value={board.stats.materials} />
-              <Stat label="Quizzes" value={board.stats.quizzes_taken} />
-            </div>
-          ) : null}
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            {board ? (
+              <div className="flex flex-wrap gap-3 text-sm text-[var(--muted)]">
+                <Stat label="Courses" value={board.stats.courses} />
+                <Stat label="Open tasks" value={board.stats.open_tasks} />
+                <Stat label="Notes" value={board.stats.materials} />
+                <Stat label="Quizzes" value={board.stats.quizzes_taken} />
+              </div>
+            ) : null}
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={async () => {
+                if (sessionId) localStorage.removeItem(messagesKey(sessionId));
+                localStorage.removeItem(SESSION_KEY);
+                setMessages([WELCOME]);
+                setError(null);
+                const res = await fetch(`${API}/api/sessions`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({}),
+                });
+                if (!res.ok) {
+                  setError(`Could not create session (${res.status})`);
+                  return;
+                }
+                const data = await res.json();
+                const id = data.sessionId as string;
+                localStorage.setItem(SESSION_KEY, id);
+                setSessionId(id);
+                const boardRes = await fetch(`${API}/api/sessions/${id}/board`);
+                if (!boardRes.ok) {
+                  setError('Board failed after new session');
+                  return;
+                }
+                setBoard((await boardRes.json()) as Board);
+              }}
+            >
+              New session
+            </button>
+          </div>
         </header>
 
         {error ? (
@@ -339,10 +426,24 @@ export default function Home() {
                   <li className="text-sm text-[var(--muted)]">Paste lecture notes so the tutor can use them.</li>
                 ) : (
                   board!.materials.map((m) => (
-                    <li key={m.id} className="rounded-lg border border-[var(--line)] bg-white px-3 py-2">
+                    <li
+                      key={m.id}
+                      className={`rounded-lg border bg-white px-3 py-2 ${
+                        cited.includes(m.title)
+                          ? 'border-[var(--accent)] ring-2 ring-[var(--accent-soft)]'
+                          : 'border-[var(--line)]'
+                      }`}
+                    >
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="text-sm font-medium">{m.title}</div>
+                          <div className="text-sm font-medium">
+                            {m.title}
+                            {cited.includes(m.title) ? (
+                              <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--accent)]">
+                                retrieved
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="text-xs text-[var(--muted)]">
                             {courseLabel(m.course_id)} · {m.preview}
                           </div>
@@ -413,14 +514,41 @@ export default function Home() {
                 <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--font-display), Georgia, serif' }}>
                   Tutor
                 </h2>
-                <p className="text-xs text-[var(--muted)]">Grounded in your courses, tasks, and notes.</p>
+                <div className="mt-2 rounded-lg border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
+                    Last agent trace
+                  </p>
+                  {lastTrace ? (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] uppercase text-[var(--accent)]">
+                        {lastTrace.provider}
+                      </span>
+                      {(lastTrace.tools || []).map((t, ti) => (
+                        <span
+                          key={`${t.name}-${ti}`}
+                          className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[var(--ink)]"
+                        >
+                          {t.name}
+                        </span>
+                      ))}
+                      {cited.map((s) => (
+                        <span key={s} className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                          src: {s}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-[var(--ink)]">Idle — click quiz me to watch retrieve_notes / generate_quiz fire.</p>
+                  )}
+                </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {QUICK.map((q) => (
                     <button
                       key={q}
                       type="button"
-                      className="rounded-full border border-[var(--line)] bg-white px-2.5 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                      onClick={() => setInput(q)}
+                      className="rounded-full border border-[var(--line)] bg-white px-2.5 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+                      disabled={busy}
+                      onClick={() => sendChat(q)}
                     >
                       {q}
                     </button>
@@ -438,6 +566,24 @@ export default function Home() {
                     }`}
                   >
                     {m.text}
+                    {m.role === 'assistant' && (m.provider || (m.tools && m.tools.length > 0)) ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {m.provider ? (
+                          <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--accent)]">
+                            {m.provider}
+                          </span>
+                        ) : null}
+                        {(m.tools || []).map((t, ti) => (
+                          <span
+                            key={`${t.name}-${ti}`}
+                            className="rounded-full border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)]"
+                            title={t.result || ''}
+                          >
+                            {t.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 <div ref={bottomRef} />
